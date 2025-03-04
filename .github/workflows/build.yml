@@ -33,12 +33,10 @@ jobs:
         with:
           nuitka-version: main
           script-name: bio_gui.py
-          mode: app
+          mode: onefile
           macos-app-icon: ./asserts/dna.png
           windows-icon-from-ico: ./asserts/dna.png
           linux-icon: ./asserts/dna.png
-          include-data-dir: |
-            ./asserts=asserts
           
 
       - name: Upload Artifacts
