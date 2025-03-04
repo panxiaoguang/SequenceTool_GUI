@@ -1,4 +1,4 @@
-name: Apptainer-deploy
+name: Nuitka Builder
 
 on: 
   workflow_dispatch
