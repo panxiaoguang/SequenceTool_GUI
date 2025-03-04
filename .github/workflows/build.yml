@@ -34,8 +34,12 @@ jobs:
           nuitka-version: main
           script-name: bio_gui.py
           mode: app
+          macos-app-icon: ./asserts/dna.png
+          windows-icon-from-ico: ./asserts/dna.png
+          linux-icon: ./asserts/dna.png
           include-data-dir: |
             ./asserts=asserts
+          
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
