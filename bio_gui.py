@@ -2,8 +2,6 @@ import dearpygui.dearpygui as dpg
 from Bio.Seq import reverse_complement,translate
 from Bio import SeqIO
 import io
-from Bio import pairwise2
-from Bio.pairwise2 import format_alignment
 import httpx
 from Bio import Align
 from Bio.Align import substitution_matrices
