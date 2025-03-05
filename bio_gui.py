@@ -1,10 +1,17 @@
 import dearpygui.dearpygui as dpg
 from Bio.Seq import reverse_complement,translate
 from Bio import SeqIO
-import io
+import io,os
 import httpx
 from Bio import Align
 from Bio.Align import substitution_matrices
+
+####################################################################################
+#######################################################################################
+Blat_search_tmp_data = []
+
+####################################################################################
+#######################################################################################
 
 ###################################################################################
 #####################################################################################
@@ -22,8 +29,22 @@ def get_genome_seq(genome, chrom, start, end, reverse) -> dict:
         "end": end,
         "revComp": reverse
     }
-    data = httpx.get(base_url, params=input_params).json()
+    data = httpx.get(base_url, params=input_params, timeout=None).json()
     return data
+
+def prepare_blat_input_dict(genome_type, query_type, sequence, input_id) -> dict:
+    newData = {}
+    genome_dict = {
+        "Human": "hg38",
+        "Zebrafish": "danRer11",
+        "Mouse": "mm10"
+    }
+    newData['db'] = genome_dict[genome_type]
+    newData['Type'] = query_type
+    newData['userSeq'] = sequence
+    newData['output'] = "json"
+    newData['input_id'] = input_id
+    return newData
 
 def get_blat_data(userSeq, Type, db, output) -> dict:
     base_url = "https://genome.ucsc.edu/cgi-bin/hgBlat"
@@ -33,11 +54,39 @@ def get_blat_data(userSeq, Type, db, output) -> dict:
         "db": db,
         "output": output
     }
-    data = httpx.get(base_url, params=input_params).json()
+    data = httpx.get(base_url, params=input_params, timeout=None).json()
     return data
 
+def parse_blat_data(userSeq, Type, db, output, input_id):
+    search_results = []
+    blat_data = get_blat_data(userSeq, Type, db, output)
+    raw_blat_data = blat_data['blat']
+    if Type == "protein":
+        scale_factor = 3
+    else:
+        scale_factor = 1
+    if raw_blat_data:
+        for raw_data in raw_blat_data:
+            matches = int(raw_data[0])
+            repMatches = int(raw_data[2])
+            misMatches = int(raw_data[1])
+            qinsert = int(raw_data[4])
+            tinsert = int(raw_data[6])
+            score = scale_factor*(matches+round(repMatches/2)) - \
+                scale_factor*misMatches-qinsert-tinsert
+            search_results.append([str(input_id), str(score), str(int(raw_data[11])+1), str(raw_data[12]), str(raw_data[8]),
+                                str(raw_data[13]), str(int(raw_data[15])+1), str(raw_data[16]), str(raw_data[18])])
+    return search_results
+def write_blat_to_tsv(search_results, out_file):
+    header = ["query_id", "score", "first", "last", "strand", "chrom", "start", "end", "span"]
+    with open(out_file, "w") as f:
+        f.write("\t".join(header)+"\n")
+        for result in search_results:
+            string_result = [str(item) for item in result]
+            f.write("\t".join(string_result)+"\n")
+
 def global_alignment(ref, query, gap_open, gap_extend, end_gap_open, end_gap_extend, end_gap):
-    matrix = substitution_matrices.load("NUC.4.4")
+    matrix = substitution_matrices.load(os.path.join(os.path.dirname(__file__),"asserts","NUC.4.4"))
     if not end_gap:
         aligner = Align.PairwiseAligner(
             substitution_matrix=matrix,
@@ -63,12 +112,7 @@ def global_alignment(ref, query, gap_open, gap_extend, end_gap_open, end_gap_ext
 ###################################################################################
 #####################################################################################
 
-# Create DearPyGui context
-dpg.create_context()
 
-# Create main window
-dpg.create_viewport(title='SequenceTool', width=800, height=600)
-dpg.set_viewport_pos([200, 100])
 ###############################################################
 ################功能回调区######################################
 ###############################################################
@@ -79,40 +123,24 @@ def on_search_button_click():
     sequence = dpg.get_value("search_sequence_input")
     genome_type = dpg.get_value("search_genome_selector")
     query_type = dpg.get_value("query_type_selector")
-    
-    newData = {}
     search_results = []
-
-    genome_dict = {
-        "Human": "hg38",
-        "Zebrafish": "danRer11",
-        "Mouse": "mm10"
-    }
-    newData['db'] = genome_dict[genome_type]
-    newData['Type'] = query_type
-    newData['userSeq'] = sequence
-    newData['output'] = "json"
-    
-    blat_data = get_blat_data(**newData)
-    raw_blat_data = blat_data['blat']
-    if query_type == "protein":
-        scale_factor = 3
+    global Blat_search_tmp_data
+    ##判断用户是否输入了多条序列
+    if ">" in sequence:
+        for record in SeqIO.parse(io.StringIO(sequence), "fasta"):
+            newData = prepare_blat_input_dict(genome_type, query_type, str(record.seq), str(record.id))
+            blat_data = parse_blat_data(**newData)
+            if blat_data:
+                search_results.extend(blat_data)
     else:
-        scale_factor = 1
-    if raw_blat_data:
-        for raw_data in raw_blat_data:
-            matches = int(raw_data[0])
-            repMatches = int(raw_data[2])
-            misMatches = int(raw_data[1])
-            qinsert = int(raw_data[4])
-            tinsert = int(raw_data[6])
-            score = scale_factor*(matches+round(repMatches/2)) - \
-                scale_factor*misMatches-qinsert-tinsert
-            search_results.append([str(score), str(int(raw_data[11])+1), raw_data[12], raw_data[8],
-                                raw_data[13], str(int(raw_data[15])+1), raw_data[16], raw_data[18]])
-    
+        newData = prepare_blat_input_dict(genome_type, query_type, sequence, "1")
+        blat_data = parse_blat_data(**newData)
+        if blat_data:
+            search_results.extend(blat_data)
+
     # 显示表格并添加新的搜索结果
     if search_results:
+        Blat_search_tmp_data = search_results
         # 隐藏文本显示区域，准备使用表格显示结果
         dpg.configure_item("search_result_text", show=False)
     
@@ -129,6 +157,22 @@ def on_search_button_click():
         dpg.configure_item("search_result_table", show=False)
     # 隐藏loading指示器
     dpg.configure_item("search_loading_indicator", show=False)
+
+def file_dialog_callback(sender, app_data):
+    ### 获取选择的路径
+    global Blat_search_tmp_data
+    selected_path = app_data['file_path_name']
+    # 在用户选择完路径后立即执行保存操作
+    write_blat_to_tsv(Blat_search_tmp_data, os.path.join(selected_path, "search_result.tsv"))
+    dpg.set_value("search_result_text", f"Result file has been saved to: {os.path.join(selected_path, 'search_result.tsv')}")
+    dpg.configure_item("search_result_text", show=True)
+    
+
+def on_download_button_click():
+    ###选择路径
+    dpg.show_item("file_dialog")
+
+
 
 def on_fetch_button_click():
     # 显示loading指示器
@@ -224,11 +268,18 @@ def on_alignment_submit_click():
 ###############################################################
 ################功能回调区######################################
 ###############################################################
+# Create DearPyGui context
+dpg.create_context()
+
+# Create main window
+dpg.create_viewport(title='SequenceTool', width=800, height=600)
+dpg.set_viewport_pos([200, 100])
+
 
 with dpg.font_registry():
     # first argument ids the path to the .ttf or .otf file
-    default_font = dpg.add_font("asserts/MiSans-Light.ttf", 18)
-    second_font = dpg.add_font("asserts/cour-2.ttf", 15)
+    default_font = dpg.add_font(os.path.join(os.path.dirname(__file__),"asserts","MiSans-Light.ttf"), 18)
+    second_font = dpg.add_font(os.path.join(os.path.dirname(__file__),"asserts","cour-2.ttf"), 15)
 
 # Create main window content
 with dpg.window(tag="main_window", pos=(0, 0), no_move=True, width=800, height=600):
@@ -316,13 +367,24 @@ with dpg.window(tag="main_window", pos=(0, 0), no_move=True, width=800, height=6
                     tag="query_type_selector"
                 )
                 
+                with dpg.group(horizontal=True):
                 # 搜索按钮
-                dpg.add_button(
-                    label="Search",
-                    callback=on_search_button_click,
-                    width=200,
-                    height=30
-                )
+                    dpg.add_button(
+                        label="Search",
+                        callback=on_search_button_click,
+                        width=100,
+                        height=30
+                    )
+                    dpg.add_file_dialog(
+                            directory_selector=True, show=False, callback=file_dialog_callback, tag="file_dialog",
+                            width=600 ,height=300)
+                    
+                    dpg.add_button(
+                        label="Download",
+                        callback=on_download_button_click,
+                        width=100,
+                        height=30
+                    )
                 
                 # 添加loading指示器
                 with dpg.group(horizontal=True):
@@ -332,6 +394,7 @@ with dpg.window(tag="main_window", pos=(0, 0), no_move=True, width=800, height=6
                 dpg.add_text("Search Results:")
                 with dpg.table(header_row=True, resizable=True, policy=dpg.mvTable_SizingStretchSame,
                    borders_outerH=True, borders_innerV=True, borders_outerV=True, tag="search_result_table", show=False):
+                    dpg.add_table_column(label="QueryID")
                     dpg.add_table_column(label="Score")
                     dpg.add_table_column(label="First")
                     dpg.add_table_column(label="Last")
